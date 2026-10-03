@@ -65,17 +65,21 @@ jobs:
           echo "ARCHIVE_NAME=$name" >> "$GITHUB_ENV"
           7z a -tzip -mx=5 "$name" ./publish/out/*
 
-      # The archive is ~300MB, and cloudflare rejects request bodies over
-      # 100MB with a 413 (verified against updater.041095.xyz). So the zip is
-      # split into parts and the client concatenates them back together in
-      # order. Part size is deliberately well under the limit rather than just
-      # under it, to leave room for a future proxy in front of the tunnel.
+      # The archive is ~300MB and goes up through the cloudflared tunnel, which
+      # imposes TWO limits (both measured against updater.041095.xyz):
+      #   - request bodies over ~100MB are rejected with 413
+      #   - the origin must respond within ~100s or cloudflare returns 524
+      # Throughput is roughly 0.55MB/s, so 64MB parts took ~115-125s each and
+      # failed intermittently. 20MB lands in ~35s, comfortably inside the
+      # window. The zip is split and the client concatenates the parts back
+      # together in manifest order.
       - name: split archive
         shell: bash
         run: |
           mkdir -p parts
-          split -b 64M -d -a 3 "$ARCHIVE_NAME" "parts/${ARCHIVE_NAME}.part."
-          ls -la parts/
+          split -b 20M -d -a 3 "$ARCHIVE_NAME" "parts/${ARCHIVE_NAME}.part."
+          ls -la parts/ | head -5
+          echo "part count: $(ls parts | wc -l)"
           echo "ARCHIVE_PARTS=$(ls parts | wc -l)" >> "$GITHUB_ENV"
 
       - name: manifest
@@ -135,17 +139,23 @@ jobs:
           UPLOAD_TOKEN: ${{ secrets.UPDATER_UPLOAD_TOKEN }}
         run: |
           set -euo pipefail
-          # manifest last: it is what the client polls, so uploading it last
-          # means a client never sees a manifest pointing at parts that aren't
-          # all there yet.
-          for f in parts/*; do
-            n=$(basename "$f")
-            echo "uploading $n"
-            curl -sf -m 900 -X POST -H "Authorization: Bearer $UPLOAD_TOKEN" \
-              --data-binary "@$f" "$UPDATER_BASE_URL/resources/lazer/$n"
-            echo
-          done
+
+          # 4 at a time: sequential 20MB parts would take ~9 minutes of pure
+          # upload, this is ~2.5. xargs exits non-zero if any upload fails,
+          # which combined with `set -e` aborts before latest.json is written.
+          upload_part() {
+            curl -sf -m 300 --retry 3 --retry-delay 5 -X POST \
+              -H "Authorization: Bearer $UPLOAD_TOKEN" \
+              --data-binary "@parts/$1" "$UPDATER_BASE_URL/resources/lazer/$1"
+          }
+          export -f upload_part
+          ls parts | xargs -P 4 -I{} bash -c 'upload_part "$@"' _ {}
+
+          # manifest last: it is what the client polls, so uploading it only
+          # after every part is confirmed means a client can never see a
+          # manifest pointing at parts that aren't all there yet.
           echo "uploading latest.json"
           curl -sf -m 60 -X POST -H "Authorization: Bearer $UPLOAD_TOKEN" \
             --data-binary "@latest.json" "$UPDATER_BASE_URL/resources/lazer/latest.json"
           echo
+          echo "published $(grep -o '"part_count": [0-9]*' latest.json)"
