@@ -21,6 +21,7 @@ using osu.Framework.Allocation;
 using osu.Game.Configuration;
 using osu.Game.IO;
 using osu.Game.IPC;
+using osu.Game.Online;
 using osu.Game.Performance;
 using osu.Game.Utils;
 
@@ -106,6 +107,13 @@ namespace osu.Desktop
         }
 
         public static bool IsPackageManaged => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OSU_EXTERNAL_UPDATE_PROVIDER"));
+
+        // OsuGameBase.UseDevelopmentServer is `DebugUtils.IsDebugBuild`, so any Debug build
+        // would silently fall back to dev.ppy.sh. Force it off and hand out the re;fx
+        // endpoints regardless of build type.
+        public override bool UseDevelopmentServer => false;
+
+        public override EndpointConfiguration CreateEndpoints() => new RefxEndpointConfiguration();
 
         protected override UpdateManager CreateUpdateManager()
         {
