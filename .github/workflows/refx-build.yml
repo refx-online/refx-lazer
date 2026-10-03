@@ -1,0 +1,114 @@
+name: refx lazer build
+
+on:
+  push:
+    branches: [refx]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # lazer is a big solution and hosted runners are memory-bound, so never
+    # build the whole .sln (it drags in every test project). osu.Desktop
+    # pulls in osu.Game + the four rulesets transitively, which is all the
+    # client needs.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: restore
+        run: dotnet restore osu.Desktop/osu.Desktop.csproj
+
+      # Release matters for more than speed: OsuGameBase.UseDevelopmentServer is
+      # `DebugUtils.IsDebugBuild`, so a Debug build silently points the client
+      # at dev.ppy.sh instead of production.
+      - name: publish
+        run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -o publish/out
+
+      # Log what we actually produced. The first run is how we confirm the
+      # osu.Framework `Resources` tree (fonts/textures/audio) lands in the
+      # publish output -- if it doesn't, the client starts and then fails on
+      # missing resources, and this listing is where that shows up.
+      - name: inspect publish output
+        shell: bash
+        run: |
+          echo "total size:"
+          du -sh publish/out
+          echo "top level:"
+          ls publish/out
+          echo "resource tree present?"
+          ls publish/out/Resources 2>/dev/null | head -5 || echo "(no Resources dir)"
+
+      - name: archive
+        shell: bash
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          # filename must not contain slashes: the updater upload route
+          # rejects them, and everything lands flat in one prefix.
+          name="osu-lazer-${SHA}.zip"
+          echo "ARCHIVE_NAME=$name" >> "$GITHUB_ENV"
+          7z a -tzip -mx=5 "$name" ./publish/out/*
+
+      - name: manifest
+        shell: bash
+        env:
+          SHA: ${{ github.sha }}
+          ARCHIVE_NAME: ${{ env.ARCHIVE_NAME }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          size=$(stat -c %s "$ARCHIVE_NAME")
+          md5=$(md5sum "$ARCHIVE_NAME" | cut -d' ' -f1)
+          cat > latest.json <<EOF
+          {
+            "version": "${SHA}",
+            "build": ${BUILD_NUMBER},
+            "filename": "${ARCHIVE_NAME}",
+            "url": "${UPDATER_BASE_URL}/resources/lazer/${ARCHIVE_NAME}",
+            "size": ${size},
+            "md5": "${md5}",
+            "commit": "${SHA}",
+            "repository": "refx-online/refx-lazer",
+            "branch": "${GITHUB_REF_NAME}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          cat latest.json
+
+      - name: upload client
+        uses: actions/upload-artifact@v4
+        with:
+          name: osu-lazer
+          path: |
+            ${{ env.ARCHIVE_NAME }}
+            latest.json
+
+      # publish straight to the updater so the windows box can pull the build
+      # without touching github. branch-gated: never on PRs or manual runs from
+      # other branches, so a test run can't overwrite the good artifact.
+      # needs repo secrets: UPDATER_BASE_URL, UPDATER_UPLOAD_TOKEN.
+      - name: publish to updater
+        if: github.ref == 'refs/heads/refx' && github.event_name == 'push'
+        shell: bash
+        env:
+          UPDATER_BASE_URL: ${{ secrets.UPDATER_BASE_URL }}
+          UPLOAD_TOKEN: ${{ secrets.UPDATER_UPLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          for f in "$ARCHIVE_NAME" latest.json; do
+            echo "uploading $f"
+            curl -sf -m 900 -X POST -H "Authorization: Bearer $UPLOAD_TOKEN" \
+              --data-binary "@$f" "$UPDATER_BASE_URL/resources/lazer/$f"
+            echo
+          done
