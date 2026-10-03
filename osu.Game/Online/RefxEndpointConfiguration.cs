@@ -15,7 +15,7 @@ namespace osu.Game.Online
     /// </remarks>
     public class RefxEndpointConfiguration : EndpointConfiguration
     {
-        private const string PREFIX = "REFX_";
+        private const string env_prefix = "REFX_";
 
         public RefxEndpointConfiguration()
         {
@@ -49,6 +49,6 @@ namespace osu.Game.Online
         }
 
         private static string env(string name, string fallback) =>
-            Environment.GetEnvironmentVariable(PREFIX + name) is { Length: > 0 } value ? value : fallback;
+            Environment.GetEnvironmentVariable(env_prefix + name) is { Length: > 0 } value ? value : fallback;
     }
 }
