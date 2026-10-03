@@ -36,19 +36,23 @@ jobs:
       - name: publish
         run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -o publish/out
 
-      # Log what we actually produced. The first run is how we confirm the
-      # osu.Framework `Resources` tree (fonts/textures/audio) lands in the
-      # publish output -- if it doesn't, the client starts and then fails on
-      # missing resources, and this listing is where that shows up.
+      # Log what we actually produced. Game assets (textures, audio samples,
+      # tracks) are EmbeddedResource in osu.Game.Resources.csproj, so they
+      # should be sitting inside osu.Game.Resources.dll rather than in a
+      # Resources/ folder -- the biggest-files listing below is how we confirm
+      # that instead of assuming it.
       - name: inspect publish output
         shell: bash
         run: |
           echo "total size:"
           du -sh publish/out
-          echo "top level:"
-          ls publish/out
-          echo "resource tree present?"
-          ls publish/out/Resources 2>/dev/null | head -5 || echo "(no Resources dir)"
+          echo "file count:"
+          ls publish/out | wc -l
+          echo "10 largest files:"
+          find publish/out -type f -printf '%s %p\n' | sort -rn | head -10 \
+            | awk '{ printf "%8.1f MB  %s\n", $1/1048576, $2 }'
+          echo "executable present?"
+          ls -la publish/out/osu!.exe 2>/dev/null || echo "(missing osu!.exe)"
 
       - name: archive
         shell: bash
