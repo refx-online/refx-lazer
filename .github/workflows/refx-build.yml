@@ -47,8 +47,12 @@ jobs:
       # Release matters for more than speed: OsuGameBase.UseDevelopmentServer is
       # `DebugUtils.IsDebugBuild`, so a Debug build silently points the client
       # at dev.ppy.sh instead of production.
+      # shell: bash matters here -- without it this runs under pwsh, where
+      # $REFX_VERSION is an unset PowerShell variable rather than the env var,
+      # and the argument silently degrades to a bare "-p:Version=".
       - name: publish
-        run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -p:Version=$REFX_VERSION -o publish/out
+        shell: bash
+        run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -p:Version="$REFX_VERSION" -o publish/out
 
       # Log what we actually produced. Game assets (textures, audio samples,
       # tracks) are EmbeddedResource in osu.Game.Resources.csproj, so they
