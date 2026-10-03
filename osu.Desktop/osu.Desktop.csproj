@@ -9,8 +9,12 @@
     <Title>osu!</Title>
     <Product>osu!(lazer)</Product>
     <ApplicationIcon>lazer.ico</ApplicationIcon>
-    <Version>0.0.0</Version>
-    <FileVersion>0.0.0</FileVersion>
+    <!-- NOTE (refx): upstream ships 0.0.0, which makes OsuGameBase.IsDeployedBuild
+         false (AssemblyVersion.Major > 0) and therefore disables the in-game updater
+         entirely. Any non-zero major turns it on. CI overrides this per build with
+         -p:Version=1.0.<run_number> so velopack sees a monotonic version. -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0</FileVersion>
   </PropertyGroup>
 
   <!-- Required for deployment. -->

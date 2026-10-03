@@ -10,8 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# contents: write is needed to create the GitHub release that Velopack's
+# GithubSource reads. Nothing else is granted.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -27,6 +29,18 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # velopack requires a monotonic version to decide whether an update exists.
+      # run_number increases monotonically per workflow, and 1.0.<n> is a valid
+      # semver that sorts correctly. Also baked into the assembly so that
+      # OsuGameBase.IsDeployedBuild is true (otherwise the updater is disabled).
+      - name: compute version
+        shell: bash
+        run: |
+          version="1.0.${{ github.run_number }}"
+          echo "REFX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "REFX_TAG=v$version" >> "$GITHUB_ENV"
+          echo "building $version"
+
       - name: restore
         run: dotnet restore osu.Desktop/osu.Desktop.csproj
 
@@ -34,7 +48,7 @@ jobs:
       # `DebugUtils.IsDebugBuild`, so a Debug build silently points the client
       # at dev.ppy.sh instead of production.
       - name: publish
-        run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -o publish/out
+        run: dotnet publish osu.Desktop/osu.Desktop.csproj -c Release -p:Version=$REFX_VERSION -o publish/out
 
       # Log what we actually produced. Game assets (textures, audio samples,
       # tracks) are EmbeddedResource in osu.Game.Resources.csproj, so they
@@ -54,6 +68,53 @@ jobs:
           echo "executable present?"
           ls -la publish/out/osu!.exe 2>/dev/null || echo "(missing osu!.exe)"
 
+      # ── velopack packaging ──────────────────────────────────────────────────
+      # Produces Setup.exe (one-time installer) plus the .nupkg full/delta
+      # packages that the in-game updater consumes via GithubSource. This is
+      # what makes updates work from inside the game.
+      - name: install velopack cli
+        shell: bash
+        run: |
+          dotnet tool install -g vpk --version 1.2.161
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+          vpk --version
+
+      - name: velopack pack
+        shell: bash
+        run: |
+          vpk pack \
+            --packId refx-lazer \
+            --packVersion "$REFX_VERSION" \
+            --packDir publish/out \
+            --mainExe osu!.exe \
+            --packTitle "re;fx lazer" \
+            --packAuthors "refx-online" \
+            --outputDir velo-out
+          ls -la velo-out/
+
+      # Release is what GithubSource polls. Marked non-prerelease because
+      # VelopackUpdateManager only asks for prereleases on the tachyon stream.
+      # Assets are the installer + packages; the zip from later steps is a
+      # separate fallback and deliberately not attached here.
+      - name: publish velopack release
+        if: github.ref == 'refs/heads/refx' && github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # replace an existing tag if this run_number was retried, otherwise
+          # gh release create fails on the duplicate tag
+          gh release delete "$REFX_TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$REFX_TAG" \
+            --title "re;fx lazer $REFX_VERSION" \
+            --notes "Automated build ${{ github.run_number }} from ${{ github.sha }}." \
+            velo-out/*
+
+      # Everything above is the velopack path (in-game updates). It runs before
+      # the zip so a packaging failure surfaces in ~2min rather than after the
+      # slow archive, and before the updater upload so the two paths stay
+      # independent.
       - name: archive
         shell: bash
         env:

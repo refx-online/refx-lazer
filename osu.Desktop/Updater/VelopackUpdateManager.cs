@@ -55,7 +55,11 @@ namespace osu.Desktop.Updater
 
             try
             {
-                IUpdateSource updateSource = new GithubSource(@"https://github.com/ppy/osu", null, ReleaseStream.Value == Game.Configuration.ReleaseStream.Tachyon);
+                // NOTE (refx): upstream points this at ppy/osu, which would have our builds
+                // checking ppy's releases for updates. Point it at our fork instead -- our
+                // CI publishes Velopack packages as GitHub release assets on the `refx` branch.
+                // The repo is public, so a null access token is fine; we only ever read.
+                IUpdateSource updateSource = new GithubSource(@"https://github.com/refx-online/refx-lazer", null, ReleaseStream.Value == Game.Configuration.ReleaseStream.Tachyon);
                 Velopack.UpdateManager updateManager = new Velopack.UpdateManager(updateSource, new UpdateOptions
                 {
                     AllowVersionDowngrade = true
