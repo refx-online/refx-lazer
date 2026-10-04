@@ -123,10 +123,16 @@ jobs:
           fi
           ls -la velo-out/
 
-      # Release is what GithubSource polls. Marked non-prerelease because
-      # VelopackUpdateManager only asks for prereleases on the tachyon stream.
-      # Assets are the installer + packages; the zip from later steps is a
-      # separate fallback and deliberately not attached here.
+      # This MUST be `vpk upload github`, not `gh release create`.
+      #
+      # VelopackUpdateManager resolves updates through a GithubSource, which
+      # fetches the release asset `releases.win.json` (Sources/GitBase.cs ->
+      # CoreUtil.GetVeloReleaseIndexName, channel "win" for Windows) to discover
+      # available packages. Only the vpk github upload path writes that index --
+      # `gh release create` attaches the .nupkg and Setup.exe and nothing else,
+      # so the in-game updater found no updates at all. Verified against vpk
+      # 1.2.161's _GitRelease.cs, which uploads releasesFileName alongside the
+      # packages.
       - name: publish velopack release
         if: github.ref == 'refs/heads/refx' && github.event_name == 'push'
         shell: bash
@@ -134,13 +140,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # replace an existing tag if this run_number was retried, otherwise
-          # gh release create fails on the duplicate tag
+          # replace an existing tag if this run_number was retried, otherwise the
+          # upload fails on the duplicate release
           gh release delete "$REFX_TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$REFX_TAG" \
-            --title "re;fx lazer $REFX_VERSION" \
-            --notes "Automated build ${{ github.run_number }} from ${{ github.sha }}." \
-            velo-out/*
+          # no -c/--channel: vpk's Windows default is "win", which is the channel
+          # GithubSource asks for and therefore the index filename the client
+          # looks for. Passing a different one silently breaks updates again.
+          vpk upload github \
+            --repoUrl "https://github.com/refx-online/refx-lazer" \
+            --token "$GH_TOKEN" \
+            --publish \
+            --tag "$REFX_TAG" \
+            --releaseName "re;fx lazer $REFX_VERSION" \
+            -o velo-out
+          echo "--- assets now on the release ---"
+          gh release view "$REFX_TAG" --json assets --jq '.assets[].name'
 
       # Everything above is the velopack path (in-game updates). It runs before
       # the zip so a packaging failure surfaces in ~2min rather than after the
