@@ -114,9 +114,11 @@ jobs:
           for d in Releases dist publish/dist; do
             [ -d "$d" ] || continue
             if find "$d" -maxdepth 1 -type f -name '*.nupkg' | grep -q .; then
-              find "$d" -maxdepth 1 -type f \( \
-                -name '*.nupkg' -o -name '*-Setup.exe' -o -name 'assets*.json' \
-              \) -exec cp {} velo-out/ \;
+              # copy the whole directory. Enumerating assets by name kept missing
+              # ones: `vpk upload` wants the portable zip as well as the setup
+              # exe, the full nupkg and assets.win.json, and failed with
+              # "Could not find file 'refx-lazer-win-Portable.zip'".
+              cp -a "$d"/. velo-out/
               found=1
               break
             fi
