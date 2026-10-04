@@ -81,19 +81,43 @@ jobs:
         run: |
           dotnet tool install -g vpk --version 1.2.161
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
-          vpk --version
+          # NOTE: don't probe with `vpk --version` -- vpk requires a subcommand and
+          # exits non-zero on a bare flag. `dotnet tool list` is the safe check.
+          dotnet tool list --global | grep -q '^vpk ' || { echo "vpk missing after install"; exit 1; }
+          echo "vpk installed: $(dotnet tool list --global | grep '^vpk ')"
 
       - name: velopack pack
         shell: bash
         run: |
+          # NOTE: vpk has no --outputDir option -- verified against
+          # src/vpk/Velopack.Vpk/Commands/Packaging/*.cs, which is why the
+          # artifacts are collected afterwards instead of named up front.
           vpk pack \
             --packId refx-lazer \
             --packVersion "$REFX_VERSION" \
             --packDir publish/out \
-            --mainExe osu!.exe \
+            --mainExe "osu!.exe" \
             --packTitle "re;fx lazer" \
-            --packAuthors "refx-online" \
-            --outputDir velo-out
+            --packAuthors "refx-online"
+
+          mkdir -p velo-out
+          found=0
+          for d in publish/dist dist publish/out; do
+            [ -d "$d" ] || continue
+            if find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name 'Setup.exe' \) | grep -q .; then
+              find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name 'Setup.exe' \) \
+                -exec cp {} velo-out/ \;
+              found=1
+              break
+            fi
+          done
+          # Hard-fail rather than publish an assetless release: the in-game
+          # updater would silently find nothing and the breakage would only
+          # show up on a user's machine.
+          if [ "$found" -ne 1 ]; then
+            echo "::error::no velopack artifacts (.nupkg / Setup.exe) were produced"
+            exit 1
+          fi
           ls -la velo-out/
 
       # Release is what GithubSource polls. Marked non-prerelease because
