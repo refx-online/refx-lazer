@@ -89,33 +89,36 @@ jobs:
       - name: velopack pack
         shell: bash
         run: |
-          # NOTE: vpk has no --outputDir option -- verified against
-          # src/vpk/Velopack.Vpk/Commands/Packaging/*.cs, which is why the
-          # artifacts are collected afterwards instead of named up front.
+          # --runtime matters: without it vpk defaults to x86, but lazer ships
+          # win-x64 natives (and the warning says so). --runtime also pins which
+          # runtime vpk asks the installer to check for.
           vpk pack \
             --packId refx-lazer \
             --packVersion "$REFX_VERSION" \
             --packDir publish/out \
             --mainExe "osu!.exe" \
+            --runtime win-x64 \
             --packTitle "re;fx lazer" \
             --packAuthors "refx-online"
 
+          # vpk writes to a top-level Releases/ dir (it logs "Releases Directory:")
+          # and names the installer <packId>-win-Setup.exe. Don't hardcode the dir
+          # as the only option -- collect from the plausible ones and fail loudly
+          # if nothing turns up, so an assetless release can never be published.
           mkdir -p velo-out
           found=0
-          for d in publish/dist dist publish/out; do
+          for d in Releases dist publish/dist; do
             [ -d "$d" ] || continue
-            if find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name 'Setup.exe' \) | grep -q .; then
-              find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name 'Setup.exe' \) \
+            if find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name '*-Setup.exe' \) | grep -q .; then
+              find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name '*-Setup.exe' \) \
                 -exec cp {} velo-out/ \;
               found=1
               break
             fi
           done
-          # Hard-fail rather than publish an assetless release: the in-game
-          # updater would silently find nothing and the breakage would only
-          # show up on a user's machine.
           if [ "$found" -ne 1 ]; then
-            echo "::error::no velopack artifacts (.nupkg / Setup.exe) were produced"
+            echo "::error::no velopack artifacts (.nupkg / *-Setup.exe) were produced"
+            ls -la Releases 2>/dev/null || echo "(no Releases dir either)"
             exit 1
           fi
           ls -la velo-out/
