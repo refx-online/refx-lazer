@@ -45,7 +45,12 @@ namespace osu.Game.Online
             // oauth_clients table; the id must also be what the multiplayer hub validates as
             // its JWT audience.
             APIClientID = env("API_CLIENT_ID", "5");
-            APIClientSecret = env("API_CLIENT_SECRET", string.Empty);
+
+            // Defaulted rather than left empty: the release build bakes this in, and
+            // an empty secret makes /oauth/token reject the shipped client with
+            // invalid_client, so the game could never log in. Override with
+            // REFX_API_CLIENT_SECRET if the server's oauth_clients row differs.
+            APIClientSecret = env("API_CLIENT_SECRET", "devsecret");
         }
 
         private static string env(string name, string fallback) =>
