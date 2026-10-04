@@ -105,23 +105,32 @@ jobs:
           # and names the installer <packId>-win-Setup.exe. Don't hardcode the dir
           # as the only option -- collect from the plausible ones and fail loudly
           # if nothing turns up, so an assetless release can never be published.
+          # Must copy assets*.json as well as the packages: `vpk upload github`
+          # refuses to run without the channel's assets file ("Could not find
+          # assets file for channel 'win'"), and that file is produced by
+          # `vpk pack`, not by the installer.
           mkdir -p velo-out
           found=0
           for d in Releases dist publish/dist; do
             [ -d "$d" ] || continue
-            if find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name '*-Setup.exe' \) | grep -q .; then
-              find "$d" -maxdepth 1 -type f \( -name '*.nupkg' -o -name '*-Setup.exe' \) \
-                -exec cp {} velo-out/ \;
+            if find "$d" -maxdepth 1 -type f -name '*.nupkg' | grep -q .; then
+              find "$d" -maxdepth 1 -type f \( \
+                -name '*.nupkg' -o -name '*-Setup.exe' -o -name 'assets*.json' \
+              \) -exec cp {} velo-out/ \;
               found=1
               break
             fi
           done
           if [ "$found" -ne 1 ]; then
-            echo "::error::no velopack artifacts (.nupkg / *-Setup.exe) were produced"
+            echo "::error::no velopack artifacts (*.nupkg) were produced"
             ls -la Releases 2>/dev/null || echo "(no Releases dir either)"
             exit 1
           fi
           ls -la velo-out/
+          if ! ls velo-out/assets*.json >/dev/null 2>&1; then
+            echo "::error::vpk produced no assets*.json -- the upload step would fail"
+            exit 1
+          fi
 
       # This MUST be `vpk upload github`, not `gh release create`.
       #
