@@ -90,6 +90,17 @@ namespace osu.Game.Screens.OnlinePlay
 
         private void startTracking(APIBeatmap beatmap)
         {
+            // The assert below documents the assumption, but it is a no-op in a release
+            // build, so a server that returns a beatmap without a set used to reach
+            // BeatmapDownloadTracker with null and NRE in its LoadComplete. That takes
+            // the whole client down. Nothing can be tracked without a set, so leave
+            // availability unknown rather than crash.
+            if (beatmap.BeatmapSet == null)
+            {
+                Logger.Log($"Beatmap {beatmap.OnlineID} has no beatmapset; cannot track its availability.", LoggingTarget.Runtime, LogLevel.Important);
+                return;
+            }
+
             Debug.Assert(beatmap.BeatmapSet != null);
 
             downloadTracker = new BeatmapDownloadTracker(beatmap.BeatmapSet);
