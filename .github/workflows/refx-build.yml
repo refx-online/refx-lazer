@@ -169,110 +169,26 @@ jobs:
 
       # Everything above is the velopack path (in-game updates). It runs before
       # the zip so a packaging failure surfaces in ~2min rather than after the
-      # slow archive, and before the updater upload so the two paths stay
-      # independent.
+      # slow archive.
+      #
+      # The zip exists only so the build can be downloaded from this run's page.
+      # Updates go through Velopack's GithubSource against this repo's
+      # releases -- see `osu.Desktop/Updater/VelopackUpdateManager.cs`, which
+      # is the only update source the client has. Nothing reads a latest.json
+      # manifest, so the chunked upload this workflow used to do was ~320MB of
+      # traffic per push toward a path no client consulted, and its xargs
+      # upload failed roughly every other run for no benefit.
       - name: archive
         shell: bash
         env:
           SHA: ${{ github.sha }}
         run: |
-          # filename must not contain slashes: the updater upload route
-          # rejects them, and everything lands flat in one prefix.
           name="osu-lazer-${SHA}.zip"
           echo "ARCHIVE_NAME=$name" >> "$GITHUB_ENV"
           7z a -tzip -mx=5 "$name" ./publish/out/*
-
-      # The archive is ~300MB and goes up through the cloudflared tunnel, which
-      # imposes TWO limits (both measured against updater.041095.xyz):
-      #   - request bodies over ~100MB are rejected with 413
-      #   - the origin must respond within ~100s or cloudflare returns 524
-      # Throughput is roughly 0.55MB/s, so 64MB parts took ~115-125s each and
-      # failed intermittently. 20MB lands in ~35s, comfortably inside the
-      # window. The zip is split and the client concatenates the parts back
-      # together in manifest order.
-      - name: split archive
-        shell: bash
-        run: |
-          mkdir -p parts
-          split -b 20M -d -a 3 "$ARCHIVE_NAME" "parts/${ARCHIVE_NAME}.part."
-          ls -la parts/ | head -5
-          echo "part count: $(ls parts | wc -l)"
-          echo "ARCHIVE_PARTS=$(ls parts | wc -l)" >> "$GITHUB_ENV"
-
-      - name: manifest
-        shell: bash
-        env:
-          SHA: ${{ github.sha }}
-          ARCHIVE_NAME: ${{ env.ARCHIVE_NAME }}
-          BUILD_NUMBER: ${{ github.run_number }}
-          ARCHIVE_PARTS: ${{ env.ARCHIVE_PARTS }}
-        run: |
-          size=$(stat -c %s "$ARCHIVE_NAME")
-          md5=$(md5sum "$ARCHIVE_NAME" | cut -d' ' -f1)
-
-          # build the parts array by hand -- jq isn't guaranteed on the runner
-          parts_json=""
-          sep=""
-          for f in parts/*; do
-            psize=$(stat -c %s "$f")
-            pmd5=$(md5sum "$f" | cut -d' ' -f1)
-            parts_json="${parts_json}${sep}{\"name\": \"$(basename "$f")\", \"size\": ${psize}, \"md5\": \"${pmd5}\"}"
-            sep=","
-          done
-
-          cat > latest.json <<EOF
-          {
-            "version": "${SHA}",
-            "build": ${BUILD_NUMBER},
-            "filename": "${ARCHIVE_NAME}",
-            "size": ${size},
-            "md5": "${md5}",
-            "parts": [${parts_json}],
-            "part_count": ${ARCHIVE_PARTS},
-            "repository": "refx-online/refx-lazer",
-            "branch": "${GITHUB_REF_NAME}",
-            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          }
-          EOF
-          cat latest.json
 
       - name: upload client
         uses: actions/upload-artifact@v4
         with:
           name: osu-lazer
-          path: |
-            ${{ env.ARCHIVE_NAME }}
-            latest.json
-
-      # publish straight to the updater so the windows box can pull the build
-      # without touching github. branch-gated: never on PRs or manual runs from
-      # other branches, so a test run can't overwrite the good artifact.
-      # needs repo secrets: UPDATER_BASE_URL, UPDATER_UPLOAD_TOKEN.
-      - name: publish to updater
-        if: github.ref == 'refs/heads/refx' && github.event_name == 'push'
-        shell: bash
-        env:
-          UPDATER_BASE_URL: ${{ secrets.UPDATER_BASE_URL }}
-          UPLOAD_TOKEN: ${{ secrets.UPDATER_UPLOAD_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # 4 at a time: sequential 20MB parts would take ~9 minutes of pure
-          # upload, this is ~2.5. xargs exits non-zero if any upload fails,
-          # which combined with `set -e` aborts before latest.json is written.
-          upload_part() {
-            curl -sf -m 300 --retry 3 --retry-delay 5 -X POST \
-              -H "Authorization: Bearer $UPLOAD_TOKEN" \
-              --data-binary "@parts/$1" "$UPDATER_BASE_URL/resources/lazer/$1"
-          }
-          export -f upload_part
-          ls parts | xargs -P 4 -I{} bash -c 'upload_part "$@"' _ {}
-
-          # manifest last: it is what the client polls, so uploading it only
-          # after every part is confirmed means a client can never see a
-          # manifest pointing at parts that aren't all there yet.
-          echo "uploading latest.json"
-          curl -sf -m 60 -X POST -H "Authorization: Bearer $UPLOAD_TOKEN" \
-            --data-binary "@latest.json" "$UPDATER_BASE_URL/resources/lazer/latest.json"
-          echo
-          echo "published $(grep -o '"part_count": [0-9]*' latest.json)"
+          path: ${{ env.ARCHIVE_NAME }}
